@@ -2,6 +2,7 @@ package com.xujiayao.discord_mc_chat.minecraft;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.xujiayao.discord_mc_chat.utils.MarkdownParser;
 import com.xujiayao.discord_mc_chat.utils.Translations;
 import com.xujiayao.discord_mc_chat.utils.Utils;
@@ -9,6 +10,7 @@ import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.emoji.RichCustomEmoji;
 import net.dv8tion.jda.api.utils.MarkdownSanitizer;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fellbaum.jemoji.EmojiManager;
 import net.minecraft.ChatFormatting;
 import net.minecraft.advancements.DisplayInfo;
@@ -31,12 +33,13 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.List;
-import java.util.NoSuchElementException;
-import java.util.Objects;
-import java.util.Optional;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -64,10 +67,10 @@ public class MinecraftEventListener {
 			//#if MC > 11802
 			if (commandSourceStack.isPlayer()) {
 				avatarUrl = getAvatarUrl(commandSourceStack.getPlayer());
-			//#else
-			//$$ if (commandSourceStack.getEntity() instanceof ServerPlayer) {
-			//$$ 	avatarUrl = getAvatarUrl((ServerPlayer) commandSourceStack.getEntity());
-			//#endif
+				//#else
+				//$$ if (commandSourceStack.getEntity() instanceof ServerPlayer) {
+				//$$ 	avatarUrl = getAvatarUrl((ServerPlayer) commandSourceStack.getEntity());
+				//#endif
 			} else {
 				avatarUrl = JDA.getSelfUser().getAvatarUrl();
 			}
@@ -377,9 +380,81 @@ public class MinecraftEventListener {
 			}
 		}
 
+		String id = player.getStringUUID();
+		Path pathToJsonFolder = FabricLoader.getInstance().getGameDir().resolve("world").resolve("skinrestorer");
+		String skinName = null;
+
+		try {
+			Map<String, String> skinCache = loadSkinsFromDirectory(pathToJsonFolder);
+			String profileName = getProfileNameByUUID(skinCache, id);
+			if (profileName != null)
+				skinName = profileName;
+		} catch (Exception e) {
+			System.out.println(e);
+		}
+
+
+
+
 		return CONFIG.generic.avatarApi
-				.replace("{player_uuid}", player.getUUID().toString())
-				.replace("{player_name}", player.getName().getString())
+				.replace("{player_uuid}", skinName != null ? skinName : player.getUUID().toString())
+				.replace("{player_name}", skinName != null ? skinName : player.getName().getString())
 				.replace("{player_textures}", hash);
+	}
+
+
+
+	public static Map<String, String> loadSkinsFromDirectory(Path directoryPath) {
+		Map<String, String> skinCache = new HashMap<>();
+
+		try (DirectoryStream<Path> stream = Files.newDirectoryStream(directoryPath, "*.json")) {
+			for (Path file : stream) {
+				String fileNameWithoutExtension = getFileNameWithoutExtension(file.getFileName().toString());
+				String profileName = extractProfileName(file);
+
+				if (profileName != null) {
+					skinCache.put(fileNameWithoutExtension, profileName);
+				} else {
+					System.err.println("Could not extract profileName from file: " + file.getFileName());
+				}
+			}
+		} catch (IOException e) {
+			System.err.println("Error while scanning directory: " + e.getMessage());
+		}
+
+		return skinCache;
+	}
+
+
+	public static String extractProfileName(Path file) {
+		try {
+			String jsonContent = Files.readString(file);
+
+			JsonObject jsonObject = JsonParser.parseString(jsonContent).getAsJsonObject();
+			JsonObject value = jsonObject.getAsJsonObject("value");
+
+			if (value != null && value.has("value")) {
+				JsonObject valueJson = JsonParser.parseString(
+						new String(java.util.Base64.getDecoder().decode(value.get("value").getAsString()))
+				).getAsJsonObject();
+
+				if (valueJson.has("profileName")) {
+					return valueJson.get("profileName").getAsString();
+				}
+			}
+		} catch (Exception e) {
+			System.err.println("Error processing file: " + file.getFileName() + " -> " + e.getMessage());
+		}
+
+		return null;
+	}
+
+	public static String getProfileNameByUUID(Map<String, String> skinCache, String uuid) {
+		return skinCache.get(uuid);
+	}
+
+	private static String getFileNameWithoutExtension(String fileName) {
+		int index = fileName.lastIndexOf(".");
+		return (index != -1) ? fileName.substring(0, index) : fileName;
 	}
 }
